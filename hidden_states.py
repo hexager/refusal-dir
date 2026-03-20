@@ -101,9 +101,12 @@ def extract_for_category(
             print(f"  [sanity] seq_len={seq_len}  "
                   f"t_inst={repr(t_inst_token)} (idx {abs_t_inst})  "
                   f"t_post-inst={repr(t_post_token)} (idx {abs_t_post})")
+            print(f"  [debug] n_questions={len(questions)}  batch input_ids shape={inputs['input_ids'].shape}")
+            print(f"  [debug] acts shape after extract={extract_activations(model, inputs, positions).shape}")
 
         acts = extract_activations(model, inputs, positions)
         all_activations.append(acts)
+    print(f"  [debug] all_activations list lengths: {[a.shape for a in all_activations]}")
     all_activations = torch.cat(all_activations, dim=0)
 
     safe_name = category.replace(" ", "_").replace("/", "_")
