@@ -62,6 +62,8 @@ def extract_activations(
     def make_hook(layer_idx):
         def hook_fn(module, input, output):
             hidden = output[0]
+            if layer_idx == 0:  # only print for layer 0 to avoid spam
+                print(f"  [hook] layer 0 hidden.shape={hidden.shape}  batch_size={batch_size}  seq_len={seq_len}")
             # Qwen returns 2D output even for batched inputs:
             #   batch_size=1 -> [seq_len, hidden_dim]
             #   batch_size>1 -> [batch*seq_len, hidden_dim]
