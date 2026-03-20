@@ -5,21 +5,15 @@ import torch.nn.functional as F
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from datasets import load_dataset
 from tqdm import tqdm
-
 # ── Constants ─────────────────────────────────────────────────────────────────
 HF_DATASET          = "declare-lab/CategoricalHarmfulQA"
-POST_INST_DELIMITER = "<|im_end|>\n<|im_start|>assistant"
+POST_INST_DELIMITER = "<|im_end|>\n<|im_start|>assistant"   # no trailing \n
 
-# ── Formatting ────────────────────────────────────────────────────────────────
 def format_no_system(instruction: str) -> str:
     return f"<|im_start|>user\n{instruction}<|im_end|>\n<|im_start|>assistant"
 
 
-# ── Batched tokenization with LEFT padding ────────────────────────────────────
 def tokenize_batch(instructions: list[str], tokenizer) -> dict:
-    """
-    Left padding performed
-    """
     formatted = [format_no_system(inst) for inst in instructions]
     return tokenizer(
         formatted,
@@ -28,31 +22,24 @@ def tokenize_batch(instructions: list[str], tokenizer) -> dict:
         add_special_tokens=False,  # template already adds special tokens
     )
 
-
-# ── Hook-based activation extraction ─────────────────────────────────────────
 def extract_activations(
     model,
     inputs: dict,
     positions: list[int],
 ) -> torch.Tensor:
-    """
-    Run a forward pass and collect residual stream at given relative positions
-    for every layer.
-    """
     n_layers   = model.config.num_hidden_layers
     batch_size = inputs["input_ids"].shape[0]
     seq_len    = inputs["input_ids"].shape[1]
 
-    # Convert relative positions to absolute
     abs_positions = [seq_len + p for p in positions]
 
-    cache = {} 
+    cache = {}  # layer_idx -> [batch, n_positions, hidden_dim]
 
     def make_hook(layer_idx):
         def hook_fn(module, input, output):
-            hidden = output[0]  # [batch, seq_len, hidden_dim] or [seq_len, hidden_dim]
+            hidden = output[0]
             if hidden.dim() == 2:
-                hidden = hidden.unsqueeze(0)
+                hidden = hidden.view(batch_size, seq_len, -1)
             cache[layer_idx] = hidden[:, abs_positions, :].detach().cpu().half()
         return hook_fn
 
@@ -68,9 +55,7 @@ def extract_activations(
     for h in handles:
         h.remove()
 
-    # Stack: [n_layers, batch, n_positions, hidden_dim]
     stacked = torch.stack([cache[i] for i in range(n_layers)], dim=0)
-    # Permute: [batch, n_layers, n_positions, hidden_dim]
     return stacked.permute(1, 0, 2, 3)
 
 
@@ -94,20 +79,19 @@ def extract_for_category(
         inputs = tokenize_batch(batch_questions, tokenizer)
         if i == 0:
             seq_len = inputs["input_ids"].shape[1]
-            abs_t_inst     = seq_len + t_inst_rel
-            abs_t_post     = seq_len + t_post_inst_rel
-            t_inst_token   = tokenizer.decode([inputs["input_ids"][0, abs_t_inst].item()])
-            t_post_token   = tokenizer.decode([inputs["input_ids"][0, abs_t_post].item()])
+            abs_t_inst  = seq_len + t_inst_rel
+            abs_t_post  = seq_len + t_post_inst_rel
+            t_inst_token  = tokenizer.decode([inputs["input_ids"][0, abs_t_inst].item()])
+            t_post_token  = tokenizer.decode([inputs["input_ids"][0, abs_t_post].item()])
             print(f"  [sanity] seq_len={seq_len}  "
                   f"t_inst={repr(t_inst_token)} (idx {abs_t_inst})  "
                   f"t_post-inst={repr(t_post_token)} (idx {abs_t_post})")
-            print(f"  [debug] n_questions={len(questions)}  batch input_ids shape={inputs['input_ids'].shape}")
-            print(f"  [debug] acts shape after extract={extract_activations(model, inputs, positions).shape}")
+            print(f"  [debug]  batch shape={inputs['input_ids'].shape}")
 
         acts = extract_activations(model, inputs, positions)
         all_activations.append(acts)
-    print(f"  [debug] all_activations list lengths: {[a.shape for a in all_activations]}")
     all_activations = torch.cat(all_activations, dim=0)
+    print(f"  [debug]  final shape={all_activations.shape}")
 
     safe_name = category.replace(" ", "_").replace("/", "_")
     out_path  = os.path.join(output_dir, f"activations_{safe_name}.pt")
@@ -130,7 +114,6 @@ def main():
     tokenizer.padding_side = "left"                 # critical — do not remove
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token   # Qwen needs this
-
     delim_ids = tokenizer(
         POST_INST_DELIMITER,
         return_tensors="pt",
@@ -138,20 +121,17 @@ def main():
     ).input_ids[0]
     n_delim = len(delim_ids)
     print(f"Delimiter length: {n_delim} tokens")
-
     print(f"Loading model {args.model}...")
     model = AutoModelForCausalLM.from_pretrained(
         args.model,
-        torch_dtype=torch.float16,
+        dtype=torch.float16,
         device_map="auto",
     )
     model.eval()
     print(f"  n_layers={model.config.num_hidden_layers}  "
           f"hidden_dim={model.config.hidden_size}\n")
-
     print("Loading CategoricalHarmfulQA...")
     dataset = load_dataset(HF_DATASET, split="en")
-
     categories = {}
     for example in dataset:
         cat = example["Category"]
@@ -163,7 +143,6 @@ def main():
     for cat, qs in sorted(categories.items()):
         print(f"  {cat}: {len(qs)} examples")
     print()
-
     for category, questions in sorted(categories.items()):
         if args.dry_run:
             questions = questions[:10]
@@ -172,13 +151,13 @@ def main():
             print(f"\nExtracting: {category} ({len(questions)} examples)")
 
         extract_for_category(
-            category    = category,
-            questions   = questions,
-            model       = model,
-            tokenizer   = tokenizer,
-            n_delim     = n_delim,
-            batch_size  = args.batch_size,
-            output_dir  = args.output_dir,
+            category   = category,
+            questions  = questions,
+            model      = model,
+            tokenizer  = tokenizer,
+            n_delim    = n_delim,
+            batch_size = args.batch_size,
+            output_dir = args.output_dir,
         )
 
     print("\nDone. All categories extracted.")
