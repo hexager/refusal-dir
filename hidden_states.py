@@ -5,15 +5,24 @@ import torch.nn.functional as F
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from datasets import load_dataset
 from tqdm import tqdm
+
 # ── Constants ─────────────────────────────────────────────────────────────────
 HF_DATASET          = "declare-lab/CategoricalHarmfulQA"
 POST_INST_DELIMITER = "<|im_end|>\n<|im_start|>assistant"   # no trailing \n
 
+
+# ── Formatting ────────────────────────────────────────────────────────────────
 def format_no_system(instruction: str) -> str:
     return f"<|im_start|>user\n{instruction}<|im_end|>\n<|im_start|>assistant"
 
 
+# ── Batched tokenization with LEFT padding ────────────────────────────────────
 def tokenize_batch(instructions: list[str], tokenizer) -> dict:
+    """
+    Tokenize a batch of instructions with left-padding.
+    Left-padding ensures t_inst is always at -(n_delim+1) and
+    t_post-inst is always at -1, regardless of sequence length.
+    """
     formatted = [format_no_system(inst) for inst in instructions]
     return tokenizer(
         formatted,
@@ -22,15 +31,30 @@ def tokenize_batch(instructions: list[str], tokenizer) -> dict:
         add_special_tokens=False,  # template already adds special tokens
     )
 
+
+# ── Hook-based activation extraction ─────────────────────────────────────────
 def extract_activations(
     model,
     inputs: dict,
     positions: list[int],
 ) -> torch.Tensor:
+    """
+    Run a forward pass and collect residual stream at given relative positions
+    for every layer.
+
+    Args:
+        model    : HuggingFace causal LM
+        inputs   : tokenized batch (input_ids, attention_mask) on CPU
+        positions: list of relative (negative) token indices, e.g. [-5, -1]
+
+    Returns:
+        Tensor of shape [batch_size, n_layers, n_positions, hidden_dim]
+    """
     n_layers   = model.config.num_hidden_layers
     batch_size = inputs["input_ids"].shape[0]
     seq_len    = inputs["input_ids"].shape[1]
 
+    # Convert relative positions to absolute
     abs_positions = [seq_len + p for p in positions]
 
     cache = {}  # layer_idx -> [batch, n_positions, hidden_dim]
@@ -38,8 +62,13 @@ def extract_activations(
     def make_hook(layer_idx):
         def hook_fn(module, input, output):
             hidden = output[0]
+            # Qwen returns 2D output even for batched inputs:
+            #   batch_size=1 -> [seq_len, hidden_dim]
+            #   batch_size>1 -> [batch*seq_len, hidden_dim]
+            # Reshape to [batch, seq_len, hidden_dim] before indexing
             if hidden.dim() == 2:
-                hidden = hidden.view(batch_size, seq_len, -1)
+                actual_batch = inputs["input_ids"].shape[0]
+                hidden = hidden.view(actual_batch, seq_len, -1)
             cache[layer_idx] = hidden[:, abs_positions, :].detach().cpu().half()
         return hook_fn
 
@@ -55,7 +84,9 @@ def extract_activations(
     for h in handles:
         h.remove()
 
+    # Stack: [n_layers, batch, n_positions, hidden_dim]
     stacked = torch.stack([cache[i] for i in range(n_layers)], dim=0)
+    # Permute: [batch, n_layers, n_positions, hidden_dim]
     return stacked.permute(1, 0, 2, 3)
 
 
@@ -69,7 +100,10 @@ def extract_for_category(
     batch_size: int,
     output_dir: str,
 ):
+    """Extract and save activations for all examples in one category."""
     all_activations = []
+
+    # Relative positions — stable under left-padding
     t_inst_rel      = -(n_delim + 1)  # last token of user instruction
     t_post_inst_rel = -1               # last token of post-instruction delimiter
     positions = [t_inst_rel, t_post_inst_rel]
@@ -77,6 +111,8 @@ def extract_for_category(
     for i in tqdm(range(0, len(questions), batch_size), desc=category):
         batch_questions = questions[i : i + batch_size]
         inputs = tokenize_batch(batch_questions, tokenizer)
+
+        # Sanity check on first batch: verify positions look right
         if i == 0:
             seq_len = inputs["input_ids"].shape[1]
             abs_t_inst  = seq_len + t_inst_rel
@@ -90,6 +126,8 @@ def extract_for_category(
 
         acts = extract_activations(model, inputs, positions)
         all_activations.append(acts)
+
+    # [n_examples, n_layers, 2, hidden_dim]
     all_activations = torch.cat(all_activations, dim=0)
     print(f"  [debug]  final shape={all_activations.shape}")
 
@@ -109,11 +147,15 @@ def main():
     args = parser.parse_args()
 
     os.makedirs(args.output_dir, exist_ok=True)
+
+    # ── Load tokenizer with LEFT padding ─────────────────────────────────────
     print("Loading tokenizer...")
     tokenizer = AutoTokenizer.from_pretrained(args.model)
     tokenizer.padding_side = "left"                 # critical — do not remove
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token   # Qwen needs this
+
+    # Compute delimiter length once
     delim_ids = tokenizer(
         POST_INST_DELIMITER,
         return_tensors="pt",
@@ -121,6 +163,8 @@ def main():
     ).input_ids[0]
     n_delim = len(delim_ids)
     print(f"Delimiter length: {n_delim} tokens")
+
+    # ── Load model ────────────────────────────────────────────────────────────
     print(f"Loading model {args.model}...")
     model = AutoModelForCausalLM.from_pretrained(
         args.model,
@@ -130,8 +174,12 @@ def main():
     model.eval()
     print(f"  n_layers={model.config.num_hidden_layers}  "
           f"hidden_dim={model.config.hidden_size}\n")
+
+    # ── Load CATQA ────────────────────────────────────────────────────────────
     print("Loading CategoricalHarmfulQA...")
     dataset = load_dataset(HF_DATASET, split="en")
+
+    # Group by category
     categories = {}
     for example in dataset:
         cat = example["Category"]
@@ -143,6 +191,8 @@ def main():
     for cat, qs in sorted(categories.items()):
         print(f"  {cat}: {len(qs)} examples")
     print()
+
+    # ── Extract per category ──────────────────────────────────────────────────
     for category, questions in sorted(categories.items()):
         if args.dry_run:
             questions = questions[:10]
