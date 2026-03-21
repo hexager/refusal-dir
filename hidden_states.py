@@ -132,7 +132,6 @@ def main():
         print(f"Loading ALPACA (harmless baseline)...")
         alpaca = load_dataset(ALPACA_DATASET, split="train")
 
-        # Use 'instruction' field, skip examples with empty instructions
         instructions = [
             ex["instruction"] for ex in alpaca
             if ex["instruction"].strip()
