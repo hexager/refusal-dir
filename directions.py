@@ -79,6 +79,10 @@ def main():
     parser.add_argument("--output_dir",      default="results/")
     parser.add_argument("--position",        default=0, type=int,
                         help="Token position to use: 0=t_inst (harmfulness), 1=t_post-inst (refusal)")
+    parser.add_argument("--layer_start", default=9,  type=int,
+                    help="Start layer for similarity computation (inclusive)")
+    parser.add_argument("--layer_end",   default=20, type=int,
+                    help="End layer for similarity computation (inclusive)")
     args = parser.parse_args()
 
     os.makedirs(args.output_dir, exist_ok=True)
@@ -106,7 +110,9 @@ def main():
         all_raw[i]    = raw
         all_normed[i] = normed
     print("\nComputing cosine similarity matrix...")
-    layer_sim, mean_sim = compute_cosine_similarity_matrix(all_normed)
+    #layer_sim, mean_sim = compute_cosine_similarity_matrix(all_normed)
+    directions_subset = all_normed[:, args.layer_start:args.layer_end+1, :]
+    layer_sim, mean_sim = compute_cosine_similarity_matrix(directions_subset)
     off_diag_means      = compute_off_diagonal_means(mean_sim)
     print("\n── Inter-category cosine similarity (off-diagonal means) ───────────")
     print(f"  {'Category':<35}  {'Mean sim to others':>20}")
