@@ -7,7 +7,7 @@ from tqdm import tqdm
 
 CATQA_DATASET       = "declare-lab/CategoricalHarmfulQA"
 ALPACA_DATASET      = "tatsu-lab/alpaca"
-MODEL_ID            = "Qwen/Qwen2.5-1.5B-Instruct"
+MODEL_ID            = "Qwen/Qwen2.5-7B-Instruct"
 POST_INST_DELIMITER = "<|im_end|>\n<|im_start|>assistant"   # no trailing \n, matches Zhao et al. Table 4
 
 
@@ -103,7 +103,7 @@ def main():
     parser.add_argument("--batch_size", default=8, type=int)
     parser.add_argument("--harmless",   action="store_true",
                         help="Extract harmless baseline from ALPACA instead of CATQA")
-    parser.add_argument("--n_harmless", default=550, type=int,
+    parser.add_argument("--n_harmless", default=150, type=int,
                         help="Number of ALPACA examples to use (default 550, matches total CATQA size)")
     parser.add_argument("--dry_run",    action="store_true",
                         help="Run on first 10 examples only")
