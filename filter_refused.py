@@ -118,6 +118,7 @@ def main():
     parser.add_argument("--max_new_tokens",  default=50, type=int)
     parser.add_argument("--dry_run",         action="store_true",
                         help="Run on first 10 examples per category only")
+    parser.add_argument("--batch_size", default=4, type=int)
     args = parser.parse_args()
     print("Loading tokenizer...")
     tokenizer = AutoTokenizer.from_pretrained(args.model)
@@ -156,7 +157,7 @@ def main():
         if args.dry_run:
             questions = questions[:10]
             acts      = acts[:10]
-        responses     = get_model_responses(questions, model, tokenizer, args.max_new_tokens)
+        responses = get_model_responses(questions, model, tokenizer, args.max_new_tokens, args.batch_size)
         refused_mask  = torch.tensor([is_refusal(r) for r in responses])
         n_refused     = refused_mask.sum().item()
         n_total       = len(questions)
