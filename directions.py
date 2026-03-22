@@ -109,6 +109,20 @@ def main():
         raw, normed = compute_dim(harmful, harmless)
         all_raw[i]    = raw
         all_normed[i] = normed
+    # Check if mean_harmful vectors are already similar across categories
+    print("\n── Sanity: pairwise similarity of raw mean_harmful (before DIM) ────")
+    raw_means = torch.zeros(n_categories, n_layers, hidden_dim)
+    for i, fname in enumerate(CATEGORY_FILENAMES):
+        path = os.path.join(args.activations_dir, f"activations_{fname}.pt")
+        harmful = load_activations(path, position=0)
+        raw_means[i] = harmful.mean(dim=0)
+
+    raw_means_normed = F.normalize(raw_means, dim=-1)
+    # average cosine sim across layers for each pair
+    sim = torch.einsum('ilh,jlh->ijl', raw_means_normed, raw_means_normed).mean(dim=-1)
+    off_diag = sim[~torch.eye(n_categories, dtype=torch.bool)].mean()
+    print(f"  Mean pairwise cosine sim of raw harmful means: {off_diag:.4f}")
+    print(f"  (If this is >0.99, all harmful categories look identical at t_inst)")
     print("\nComputing cosine similarity matrix...")
     #layer_sim, mean_sim = compute_cosine_similarity_matrix(all_normed)
     directions_subset = all_normed[:, args.layer_start:args.layer_end+1, :]
