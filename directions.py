@@ -83,6 +83,8 @@ def main():
                     help="Start layer for similarity computation (inclusive)")
     parser.add_argument("--layer_end",   default=20, type=int,
                     help="End layer for similarity computation (inclusive)")
+    parser.add_argument("--refused", action="store_true",
+                    help="Use refused-only filtered activations")
     args = parser.parse_args()
 
     os.makedirs(args.output_dir, exist_ok=True)
@@ -113,7 +115,8 @@ def main():
     print("\n── Sanity: pairwise similarity of raw mean_harmful (before DIM) ────")
     raw_means = torch.zeros(n_categories, n_layers, hidden_dim)
     for i, fname in enumerate(CATEGORY_FILENAMES):
-        path = os.path.join(args.activations_dir, f"activations_{fname}.pt")
+        prefix = "activations_refused_" if args.refused else "activations_"
+        path = os.path.join(args.activations_dir, f"{prefix}{fname}.pt")
         harmful = load_activations(path, position=0)
         raw_means[i] = harmful.mean(dim=0)
 
