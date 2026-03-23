@@ -7,7 +7,7 @@ from tqdm import tqdm
 
 CATQA_DATASET       = "declare-lab/CategoricalHarmfulQA"
 ALPACA_DATASET      = "tatsu-lab/alpaca"
-MODEL_ID            = "Qwen/Qwen2.5-7B-Instruct"
+MODEL_ID            = "Qwen/Qwen2-7B-Instruct"
 POST_INST_DELIMITER = "<|im_end|>\n<|im_start|>assistant"   # no trailing \n, matches Zhao et al. Table 4
 
 
